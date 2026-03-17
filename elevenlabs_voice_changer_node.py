@@ -41,12 +41,18 @@ def wav_bytes_to_tensor(wav_bytes: bytes):
 
 
 def mp3_to_wav_bytes(mp3_bytes: bytes) -> bytes:
-    import torchaudio
-    buf_in = io.BytesIO(mp3_bytes)
-    waveform, sr = torchaudio.load(buf_in, format="mp3")
-    buf_out = io.BytesIO()
-    torchaudio.save(buf_out, waveform, sr, format="wav")
-    return buf_out.getvalue()
+    """Decode mp3 -> wav via ffmpeg (no torchaudio/torchcodec needed)."""
+    import subprocess
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-f", "mp3", "-i", "pipe:0",
+         "-f", "wav", "-acodec", "pcm_s16le", "pipe:1"],
+        input=mp3_bytes,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg mp3->wav failed:
+{result.stderr.decode()}")
+    return result.stdout
 
 
 # ─── node ────────────────────────────────────────────────────────────────────
