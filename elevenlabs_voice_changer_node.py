@@ -158,7 +158,7 @@ class ElevenLabsVoiceChangerNode:
                 "stability":        stability,
                 "similarity_boost": similarity_boost,
                 "style":            style,
-                "use_speaker_boost": True,
+                "use_speaker_boost": False,
             }),
             "remove_background_noise": str(remove_background_noise).lower(),
         }
