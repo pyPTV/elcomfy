@@ -1,3 +1,13 @@
-from .elevenlabs_voice_changer_node import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .elevenlabs_voice_changer_node import (
+    NODE_CLASS_MAPPINGS       as _M1,
+    NODE_DISPLAY_NAME_MAPPINGS as _D1,
+)
+from .elevenlabs_fal_voice_changer_node import (
+    NODE_CLASS_MAPPINGS       as _M2,
+    NODE_DISPLAY_NAME_MAPPINGS as _D2,
+)
+
+NODE_CLASS_MAPPINGS        = {**_M1, **_M2}
+NODE_DISPLAY_NAME_MAPPINGS = {**_D1, **_D2}
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
