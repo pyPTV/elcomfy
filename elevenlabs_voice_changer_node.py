@@ -10,7 +10,6 @@ import subprocess
 import requests
 import torch
 
-
 # ─── форматы ─────────────────────────────────────────────────────────────────
 
 OUTPUT_FORMATS = [
@@ -24,7 +23,6 @@ OUTPUT_FORMATS = [
     # Telephony
     "ulaw_8000", "alaw_8000",
 ]
-
 
 # ─── audio helpers ───────────────────────────────────────────────────────────
 
@@ -58,13 +56,12 @@ def wav_bytes_to_tensor(wav_bytes: bytes):
 def decode_audio_response(data: bytes, output_format: str) -> bytes:
     """
     Decode API response bytes -> WAV bytes.
-    PCM formats are already raw samples — just wrap in WAV header.
-    Everything else (mp3, opus, ulaw, alaw) goes through ffmpeg.
+    PCM — просто оборачиваем в WAV заголовок.
+    Всё остальное (mp3, opus, ulaw, alaw) — через ffmpeg.
     """
     fmt = output_format.lower()
 
     if fmt.startswith("pcm_"):
-        # raw PCM s16le — wrap into WAV
         sr = int(fmt.split("_")[1])
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
@@ -74,17 +71,16 @@ def decode_audio_response(data: bytes, output_format: str) -> bytes:
             wf.writeframes(data)
         return buf.getvalue()
 
-    # detect input format for ffmpeg
     if fmt.startswith("mp3"):
         in_fmt = "mp3"
     elif fmt.startswith("opus"):
-        in_fmt = "ogg"   # opus in ogg container
+        in_fmt = "ogg"
     elif fmt.startswith("ulaw"):
         in_fmt = "mulaw"
     elif fmt.startswith("alaw"):
         in_fmt = "alaw"
     else:
-        in_fmt = "mp3"   # fallback
+        in_fmt = "mp3"
 
     result = subprocess.run(
         ["ffmpeg", "-y", "-f", in_fmt, "-i", "pipe:0",
@@ -125,11 +121,19 @@ class ElevenLabsVoiceChangerNode:
                 }),
                 "similarity_boost": ("FLOAT", {
                     "default": 0.75, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider",
-                    "tooltip": "Схожесть с голосом. Слишком высокое + плохой исходник = артефакты.",
+                    "tooltip": "Схожесть с целевым голосом. Слишком высокое + плохой исходник = артефакты.",
                 }),
                 "style": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider",
-                    "tooltip": "Усиление стиля. ElevenLabs рекомендует держать на 0.",
+                    "tooltip": "Усиление стиля исходного спикера. ElevenLabs рекомендует держать на 0.",
+                }),
+                "speed": ("FLOAT", {
+                    "default": 1.0, "min": 0.7, "max": 1.2, "step": 0.01, "display": "slider",
+                    "tooltip": "Скорость речи. 1.0 = без изменений. <1.0 = медленнее, >1.0 = быстрее.",
+                }),
+                "use_speaker_boost": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Усиливает схожесть с исходным спикером. Увеличивает латентность.",
                 }),
                 "remove_background_noise": ("BOOLEAN", {"default": False}),
                 "seed": ("INT", {
@@ -143,11 +147,12 @@ class ElevenLabsVoiceChangerNode:
                 model_id="eleven_multilingual_sts_v2",
                 output_format="pcm_44100",
                 stability=0.5, similarity_boost=0.75, style=0.0,
+                speed=1.0, use_speaker_boost=False,
                 remove_background_noise=False, seed=0):
 
         waveform    = audio["waveform"]
         sample_rate = audio["sample_rate"]
-        print(f"[ElevenLabsVC] Input: shape={waveform.shape}, sr={sample_rate}, output_format={output_format}")
+        print(f"[ElevenLabsVC] Input: shape={waveform.shape}, sr={sample_rate}, format={output_format}")
 
         wav_bytes = tensor_to_wav_bytes(waveform, sample_rate)
         print(f"[ElevenLabsVC] Sending {len(wav_bytes)/1024:.1f} KB WAV -> ElevenLabs…")
@@ -158,7 +163,8 @@ class ElevenLabsVoiceChangerNode:
                 "stability":        stability,
                 "similarity_boost": similarity_boost,
                 "style":            style,
-                "use_speaker_boost": False,
+                "speed":            speed,
+                "use_speaker_boost": use_speaker_boost,
             }),
             "remove_background_noise": str(remove_background_noise).lower(),
         }
