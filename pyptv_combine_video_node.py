@@ -146,9 +146,13 @@ class VideoCombine_pyPTV:
         if audio_tmp is not None:
             args += ["-i", audio_tmp]
 
-        args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt,
-                 "-b:v", f"{bitrate_mbit}M", "-maxrate", f"{bitrate_mbit}M",
-                 "-bufsize", f"{bitrate_mbit * 2}M"]
+        bitrate_args = ["-b:v", f"{bitrate_mbit}M",
+                        "-maxrate", f"{bitrate_mbit}M",
+                        "-bufsize", f"{bitrate_mbit * 2}M"]
+        if encode_codec == "nvenc_hevc":
+            bitrate_args = ["-rc", "vbr"] + bitrate_args
+
+        args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt] + bitrate_args
 
         if audio_tmp is not None:
             args += ["-c:a", "aac", "-shortest"]
