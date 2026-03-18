@@ -126,7 +126,7 @@ def _load_video_ffmpeg(video_path, decode_codec):
     if len(images) == 0:
         raise RuntimeError("No frames were loaded from the video.")
 
-    audio = lazy_get_audio(video_path, 0, duration)
+    audio = lazy_get_audio(video_path, 0, duration)()
     return images, fps, audio
 
 
