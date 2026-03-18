@@ -6,39 +6,50 @@ import folder_paths
 from comfy.utils import ProgressBar
 from .pyptv_utils import ffmpeg_path, ENCODE_ARGS
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 PYPTV_CODECS_ENCODE = ["h264", "nvenc_hevc", "hevc", "av1"]
 
-# input pix_fmt is always rgb48le (3ch) or rgba64le (4ch) — decided at runtime
-_ENCODE_CODEC_ARGS = {
-    "h264":       ["-c:v", "libx264",    "-pix_fmt", "yuv420p"],
-    "nvenc_hevc": ["-c:v", "hevc_nvenc", "-pix_fmt", "p010le"],
-    "hevc":       ["-c:v", "libx265",    "-pix_fmt", "yuv420p10le"],
-    "av1":        ["-c:v", "libsvtav1",  "-pix_fmt", "yuv420p10le"],
+# pix_fmt choices exposed to user
+PYPTV_PIX_FMTS = [
+    "auto",         # pick best for chosen codec (default)
+    "yuv420p",      # 8-bit, max compatibility
+    "yuv420p10le",  # 10-bit, good quality
+    "p010le",       # 10-bit, NVENC/DXVA friendly
+    "yuv444p",      # 8-bit, no chroma subsampling
+    "yuv444p10le",  # 10-bit, no chroma subsampling
+]
+
+# default pix_fmt per codec when user picks "auto"
+_CODEC_DEFAULT_PIX_FMT = {
+    "h264":       "yuv420p",
+    "nvenc_hevc": "p010le",
+    "hevc":       "yuv420p10le",
+    "av1":        "yuv420p10le",
 }
 
-# ---------------------------------------------------------------------------
-# NODE: VideoCombine_pyPTV
-# ---------------------------------------------------------------------------
+_CODEC_LIB = {
+    "h264":       "libx264",
+    "nvenc_hevc": "hevc_nvenc",
+    "hevc":       "libx265",
+    "av1":        "libsvtav1",
+}
+
 
 class VideoCombine_pyPTV:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "fps": ("FLOAT", {
+                "images":          ("IMAGE",),
+                "fps":             ("FLOAT", {
                     "default": 24.0, "min": 1.0, "max": 120.0, "step": 0.5,
-                    "tooltip": "Base FPS — connect to 'fps' output of Load Video node."
+                    "tooltip": "Base FPS. Connect to 'fps' output of Load Video node."
                 }),
-                "fps_multiplier": ("INT", {
+                "fps_multiplier":  ("INT", {
                     "default": 1, "min": 1, "max": 16, "step": 1,
-                    "tooltip": "Multiplies fps. E.g. 2 doubles the playback speed."
+                    "tooltip": "Multiplies fps. 2 = double speed output."
                 }),
-                "encode_codec": (PYPTV_CODECS_ENCODE, {"default": "h264"}),
+                "encode_codec":    (PYPTV_CODECS_ENCODE, {"default": "h264"}),
+                "pix_fmt":         (PYPTV_PIX_FMTS, {"default": "auto"}),
                 "filename_prefix": ("STRING", {"default": "pyPTV_video"}),
             },
             "optional": {
@@ -51,7 +62,7 @@ class VideoCombine_pyPTV:
     OUTPUT_NODE = True
     FUNCTION = "combine"
 
-    def combine(self, images, fps, fps_multiplier, encode_codec,
+    def combine(self, images, fps, fps_multiplier, encode_codec, pix_fmt,
                 filename_prefix, audio=None):
 
         output_dir = folder_paths.get_output_directory()
@@ -66,15 +77,18 @@ class VideoCombine_pyPTV:
             i += 1
 
         effective_fps = fps * fps_multiplier
-
-        # images: [N, H, W, C] float32 [0, 1]
         N, H, W, C = images.shape
 
-        # keep 16-bit precision going into ffmpeg
+        # resolve pix_fmt
+        resolved_pix_fmt = (
+            _CODEC_DEFAULT_PIX_FMT[encode_codec]
+            if pix_fmt == "auto"
+            else pix_fmt
+        )
+
+        # keep 16-bit going into ffmpeg, let ffmpeg do the conversion
         raw = (images.numpy() * 65535).clip(0, 65535).astype(np.uint16)
         in_pix_fmt = "rgba64le" if C == 4 else "rgb48le"
-
-        codec_args = _ENCODE_CODEC_ARGS.get(encode_codec, _ENCODE_CODEC_ARGS["h264"])
 
         args = [
             ffmpeg_path, "-y",
@@ -85,7 +99,7 @@ class VideoCombine_pyPTV:
             "-i", "pipe:0",
         ]
 
-        # --- audio ---
+        # audio
         audio_bytes = None
         if audio is not None:
             try:
@@ -101,14 +115,13 @@ class VideoCombine_pyPTV:
         if audio_bytes is not None:
             args += ["-f", "wav", "-i", "pipe:3"]
 
-        args += codec_args
+        args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt]
 
         if audio_bytes is not None:
             args += ["-c:a", "aac", "-shortest"]
 
         args += [out_path]
 
-        # --- encode ---
         pbar = ProgressBar(N)
 
         try:

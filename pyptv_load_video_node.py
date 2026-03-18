@@ -7,25 +7,18 @@ import torch
 import folder_paths
 from comfy.utils import ProgressBar
 from .pyptv_utils import (
-    ffmpeg_path, ENCODE_ARGS, BIGMAX,
-    lazy_get_audio, strip_path, validate_path,
-    hash_path, is_url
+    ffmpeg_path, ENCODE_ARGS,
+    lazy_get_audio, strip_path, hash_path
 )
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
+VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
 PYPTV_CODECS_DECODE = ["auto", "h264", "hevc", "av1", "vp9"]
 
-VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
-
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _probe_video(video_path, decode_codec="auto"):
-    """Run a dummy ffmpeg pass to extract width, height, fps, duration, alpha."""
     args = [ffmpeg_path]
     if decode_codec == "vp9":
         args += ["-c:v", "libvpx-vp9"]
@@ -56,19 +49,13 @@ def _probe_video(video_path, decode_codec="auto"):
         raise RuntimeError("Failed to parse video info.\nFFMPEG output:\n" + lines)
 
     dur_m = re.search(r"Duration: (\d+):(\d+):([\d\.]+),", lines)
-    if dur_m:
-        duration = (int(dur_m.group(1)) * 3600
-                    + int(dur_m.group(2)) * 60
-                    + float(dur_m.group(3)))
-    else:
-        duration = 0.0
+    duration = (int(dur_m.group(1)) * 3600 + int(dur_m.group(2)) * 60
+                + float(dur_m.group(3))) if dur_m else 0.0
 
     return width, height, fps, duration, alpha
 
 
-def _ffmpeg_frame_generator(video_path, width, height, alpha,
-                             force_rate, frame_load_cap, decode_codec):
-    """Yield raw float32 frames [H, W, C] from ffmpeg stdout."""
+def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
     args = [ffmpeg_path, "-v", "error", "-an"]
 
     if decode_codec == "vp9":
@@ -76,20 +63,11 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha,
     elif decode_codec != "auto":
         args += ["-c:v", decode_codec]
 
-    args += ["-i", video_path, "-pix_fmt", "rgba64le"]
-
-    if force_rate > 0:
-        args += ["-vf", f"fps=fps={force_rate}"]
-
-    if frame_load_cap > 0:
-        args += ["-frames:v", str(frame_load_cap)]
-
-    args += ["-f", "rawvideo", "-"]
+    args += ["-i", video_path, "-pix_fmt", "rgba64le", "-f", "rawvideo", "-"]
 
     # rgba64le: 4 channels * 2 bytes = 8 bytes per pixel
     bpi = width * height * 8
-    total = frame_load_cap if frame_load_cap > 0 else 0
-    pbar = ProgressBar(total or 1)
+    pbar = ProgressBar(1)
     frames_yielded = 0
 
     try:
@@ -121,7 +99,7 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha,
                     if prev is not None:
                         sig = yield prev
                         frames_yielded += 1
-                        pbar.update_absolute(frames_yielded, total or frames_yielded + 1)
+                        pbar.update_absolute(frames_yielded, frames_yielded + 1)
                         if sig is not None:
                             return
                     prev = frame
@@ -134,15 +112,11 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha,
         yield prev
 
 
-def _load_video_ffmpeg(video_path, force_rate, frame_load_cap, decode_codec):
-    """Core loader — returns (images, fps, audio)."""
+def _load_video_ffmpeg(video_path, decode_codec):
     video_path = strip_path(video_path)
     width, height, fps, duration, alpha = _probe_video(video_path, decode_codec)
 
-    gen = _ffmpeg_frame_generator(
-        video_path, width, height, alpha,
-        force_rate, frame_load_cap, decode_codec
-    )
+    gen = _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec)
 
     channels = 4 if alpha else 3
     images = torch.from_numpy(
@@ -152,15 +126,12 @@ def _load_video_ffmpeg(video_path, force_rate, frame_load_cap, decode_codec):
     if len(images) == 0:
         raise RuntimeError("No frames were loaded from the video.")
 
-    out_fps = float(force_rate) if force_rate > 0 else fps
-    duration_loaded = len(images) / out_fps
-    audio = lazy_get_audio(video_path, 0, duration_loaded)
-
-    return images, out_fps, audio
+    audio = lazy_get_audio(video_path, 0, duration)
+    return images, fps, audio
 
 
 # ---------------------------------------------------------------------------
-# NODE: LoadVideoFFmpeg_pyPTV  (upload picker)
+# NODE
 # ---------------------------------------------------------------------------
 
 class LoadVideoFFmpeg_pyPTV:
@@ -174,16 +145,8 @@ class LoadVideoFFmpeg_pyPTV:
         ])
         return {
             "required": {
-                "video": (files,),
+                "video": (files, {"image_upload": True}),
                 "decode_codec": (PYPTV_CODECS_DECODE, {"default": "auto"}),
-                "force_rate": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 120.0, "step": 0.5,
-                    "tooltip": "Override FPS. 0 = use source FPS."
-                }),
-                "frame_load_cap": ("INT", {
-                    "default": 0, "min": 0, "max": BIGMAX, "step": 1,
-                    "tooltip": "Max frames to load. 0 = all."
-                }),
             },
         }
 
@@ -192,11 +155,9 @@ class LoadVideoFFmpeg_pyPTV:
     RETURN_NAMES = ("images", "fps", "audio")
     FUNCTION = "load_video"
 
-    def load_video(self, video, decode_codec, force_rate, frame_load_cap):
+    def load_video(self, video, decode_codec):
         video_path = folder_paths.get_annotated_filepath(strip_path(video))
-        images, fps, audio = _load_video_ffmpeg(
-            video_path, force_rate, frame_load_cap, decode_codec
-        )
+        images, fps, audio = _load_video_ffmpeg(video_path, decode_codec)
         return (images, fps, audio)
 
     @classmethod
@@ -211,64 +172,13 @@ class LoadVideoFFmpeg_pyPTV:
 
 
 # ---------------------------------------------------------------------------
-# NODE: LoadVideoFFmpegPath_pyPTV  (path string)
-# ---------------------------------------------------------------------------
-
-class LoadVideoFFmpegPath_pyPTV:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": ("STRING", {
-                    "placeholder": "X://insert/path/here.mp4",
-                    "vhs_path_extensions": list(VIDEO_EXTENSIONS)
-                }),
-                "decode_codec": (PYPTV_CODECS_DECODE, {"default": "auto"}),
-                "force_rate": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 120.0, "step": 0.5,
-                    "tooltip": "Override FPS. 0 = use source FPS."
-                }),
-                "frame_load_cap": ("INT", {
-                    "default": 0, "min": 0, "max": BIGMAX, "step": 1,
-                    "tooltip": "Max frames to load. 0 = all."
-                }),
-            },
-        }
-
-    CATEGORY = "pyPTV"
-    RETURN_TYPES = ("IMAGE", "FLOAT", "AUDIO")
-    RETURN_NAMES = ("images", "fps", "audio")
-    FUNCTION = "load_video"
-
-    def load_video(self, video, decode_codec, force_rate, frame_load_cap):
-        if not video or validate_path(video) is not True:
-            raise ValueError(f"Not a valid path: {video}")
-        if is_url(video):
-            video = try_download_video(video) or video
-        images, fps, audio = _load_video_ffmpeg(
-            video, force_rate, frame_load_cap, decode_codec
-        )
-        return (images, fps, audio)
-
-    @classmethod
-    def IS_CHANGED(cls, video, **kwargs):
-        return hash_path(video)
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, video):
-        return validate_path(video, allow_none=True)
-
-
-# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "LoadVideoFFmpeg_pyPTV":     LoadVideoFFmpeg_pyPTV,
-    "LoadVideoFFmpegPath_pyPTV": LoadVideoFFmpegPath_pyPTV,
+    "LoadVideoFFmpeg_pyPTV": LoadVideoFFmpeg_pyPTV,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "LoadVideoFFmpeg_pyPTV":     "Load Video FFMPEG (pyPTV)",
-    "LoadVideoFFmpegPath_pyPTV": "Load Video FFMPEG Path (pyPTV)",
+    "LoadVideoFFmpeg_pyPTV": "Load Video FFMPEG (pyPTV)",
 }
