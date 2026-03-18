@@ -145,7 +145,7 @@ class LoadVideoFFmpeg_pyPTV:
         ])
         return {
             "required": {
-                "video": (files, {"image_upload": True}),
+                "video": (files, {"video_upload": True}),
                 "decode_codec": (PYPTV_CODECS_DECODE, {"default": "auto"}),
             },
         }
