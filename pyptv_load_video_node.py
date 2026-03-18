@@ -9,19 +9,13 @@ from comfy.utils import ProgressBar
 from .pyptv_utils import ffmpeg_path, ENCODE_ARGS, strip_path, hash_path, lazy_get_audio
 
 VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
-PYPTV_CODECS_DECODE = ["auto", "h264", "hevc", "av1", "vp9"]
 
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_video(video_path, decode_codec="auto"):
-    args = [ffmpeg_path]
-    if decode_codec == "vp9":
-        args += ["-c:v", "libvpx-vp9"]
-    elif decode_codec != "auto":
-        args += ["-c:v", decode_codec]
-    args += ["-i", video_path, "-c", "copy", "-frames:v", "1", "-f", "null", "-"]
+def _probe_video(video_path):
+    args = [ffmpeg_path, "-i", video_path, "-c", "copy", "-frames:v", "1", "-f", "null", "-"]
 
     try:
         res = subprocess.run(args, stdout=subprocess.DEVNULL,
@@ -55,15 +49,9 @@ def _probe_video(video_path, decode_codec="auto"):
 # Frame generator
 # ---------------------------------------------------------------------------
 
-def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
-    args = [ffmpeg_path, "-v", "error", "-an"]
-
-    if decode_codec == "vp9":
-        args += ["-c:v", "libvpx-vp9"]
-    elif decode_codec != "auto":
-        args += ["-c:v", decode_codec]
-
-    args += ["-i", video_path, "-pix_fmt", "rgba64le", "-f", "rawvideo", "-"]
+def _ffmpeg_frame_generator(video_path, width, height, alpha):
+    args = [ffmpeg_path, "-v", "error", "-an",
+            "-i", video_path, "-pix_fmt", "rgba64le", "-f", "rawvideo", "-"]
 
     bpi = width * height * 8  # rgba64le: 4ch * 2 bytes
     pbar = ProgressBar(1)
@@ -114,11 +102,11 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
 # Core loader
 # ---------------------------------------------------------------------------
 
-def _load_video_ffmpeg(video_path, decode_codec):
+def _load_video_ffmpeg(video_path):
     video_path = strip_path(video_path)
-    width, height, fps, duration, alpha = _probe_video(video_path, decode_codec)
+    width, height, fps, duration, alpha = _probe_video(video_path)
 
-    gen = _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec)
+    gen = _ffmpeg_frame_generator(video_path, width, height, alpha)
 
     channels = 4 if alpha else 3
     images = torch.from_numpy(
@@ -147,7 +135,6 @@ class LoadVideoFFmpeg_pyPTV:
         return {
             "required": {
                 "video": (files, {"video_upload": True}),
-                "decode_codec": (PYPTV_CODECS_DECODE, {"default": "auto"}),
             },
         }
 
@@ -156,10 +143,9 @@ class LoadVideoFFmpeg_pyPTV:
     RETURN_NAMES = ("images", "fps", "audio")
     FUNCTION = "load_video"
 
-    def load_video(self, video, decode_codec):
+    def load_video(self, video):
         video_path = folder_paths.get_annotated_filepath(strip_path(video))
-        print(f"[pyPTV] path={video_path} exists={os.path.exists(video_path)}")
-        images, fps, audio = _load_video_ffmpeg(video_path, decode_codec)
+        images, fps, audio = _load_video_ffmpeg(video_path)
         return (images, fps, audio)
 
     @classmethod
