@@ -87,6 +87,10 @@ class VideoCombine_pyPTV:
                 }),
                 "encode_codec":    (PYPTV_CODECS_ENCODE, {"default": "h264"}),
                 "pix_fmt":         (PYPTV_PIX_FMTS, {"default": "auto"}),
+                "bitrate_mbit":    ("INT", {
+                    "default": 5, "min": 1, "max": 200, "step": 1,
+                    "tooltip": "Output video bitrate in Mbit/s."
+                }),
                 "filename_prefix": ("STRING", {"default": "pyPTV_video"}),
             },
             "optional": {
@@ -100,7 +104,7 @@ class VideoCombine_pyPTV:
     FUNCTION = "combine"
 
     def combine(self, images, fps, fps_multiplier, encode_codec, pix_fmt,
-                filename_prefix, audio=None):
+                bitrate_mbit, filename_prefix, audio=None):
 
         output_dir = folder_paths.get_output_directory()
         os.makedirs(output_dir, exist_ok=True)
@@ -142,7 +146,9 @@ class VideoCombine_pyPTV:
         if audio_tmp is not None:
             args += ["-i", audio_tmp]
 
-        args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt]
+        args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt,
+                 "-b:v", f"{bitrate_mbit}M", "-maxrate", f"{bitrate_mbit}M",
+                 "-bufsize", f"{bitrate_mbit * 2}M"]
 
         if audio_tmp is not None:
             args += ["-c:a", "aac", "-shortest"]
