@@ -192,4 +192,4 @@ class ElevenLabsVoiceChangerNode:
 
 
 NODE_CLASS_MAPPINGS        = {"ElevenLabsVoiceChanger": ElevenLabsVoiceChangerNode}
-NODE_DISPLAY_NAME_MAPPINGS = {"ElevenLabsVoiceChanger": "🎙️ ElevenLabs Voice Changer"}
+NODE_DISPLAY_NAME_MAPPINGS = {"ElevenLabsVoiceChanger": "ElevenLabs Voice Changer (pyPTV)"}
