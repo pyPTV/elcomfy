@@ -4,7 +4,7 @@ import subprocess
 import numpy as np
 import folder_paths
 from comfy.utils import ProgressBar
-from .utils import ffmpeg_path, ENCODE_ARGS
+from .pyptv_utils import ffmpeg_path, ENCODE_ARGS
 
 # ---------------------------------------------------------------------------
 # Constants

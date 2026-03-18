@@ -6,10 +6,10 @@ import numpy as np
 import torch
 import folder_paths
 from comfy.utils import ProgressBar
-from .utils import (
-    lazy_get_audio, strip_path, validate_path, is_url,
-    try_download_video, hash_path, calculate_file_hash,
-    ffmpeg_path, ENCODE_ARGS, BIGMAX
+from .pyptv_utils import (
+    ffmpeg_path, ENCODE_ARGS, BIGMAX,
+    lazy_get_audio, strip_path, validate_path,
+    hash_path, is_url
 )
 
 # ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ class LoadVideoFFmpeg_pyPTV:
 
     @classmethod
     def IS_CHANGED(cls, video, **kwargs):
-        return calculate_file_hash(folder_paths.get_annotated_filepath(video))
+        return hash_path(folder_paths.get_annotated_filepath(video))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video):
