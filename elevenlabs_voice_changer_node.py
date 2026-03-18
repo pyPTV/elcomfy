@@ -96,7 +96,7 @@ def decode_audio_response(data: bytes, output_format: str) -> bytes:
 
 class ElevenLabsVoiceChangerNode:
 
-    CATEGORY = "audio/elevenlabs"
+    CATEGORY = "pyPTV"
     RETURN_TYPES = ("AUDIO",)
     RETURN_NAMES = ("audio",)
     FUNCTION = "process"
