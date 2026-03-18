@@ -118,10 +118,8 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
 # ---------------------------------------------------------------------------
 
 def _extract_audio(video_path):
-    """Extract audio via ffmpeg, return {"waveform": tensor, "sample_rate": int} or None."""
-    try:
-        import torchaudio
-
+    """Return a callable that extracts audio on demand — same as VHS lazy_get_audio."""
+    def _get():
         args = [
             ffmpeg_path, "-v", "error",
             "-i", video_path,
@@ -132,14 +130,21 @@ def _extract_audio(video_path):
         ]
         res = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if res.returncode != 0 or len(res.stdout) < 44:
-            return None
+            raise RuntimeError("[pyPTV] Audio extraction failed:\n"
+                               + res.stderr.decode(*ENCODE_ARGS))
 
-        waveform, sample_rate = torchaudio.load(io.BytesIO(res.stdout))
-        return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+        import wave as _wave
+        buf = io.BytesIO(res.stdout)
+        with _wave.open(buf, "rb") as wf:
+            n_channels  = wf.getnchannels()
+            sample_rate = wf.getframerate()
+            raw         = wf.readframes(wf.getnframes())
 
-    except Exception as e:
-        print(f"[pyPTV] Audio extraction failed: {e}")
-        return None
+        samples = torch.frombuffer(bytearray(raw), dtype=torch.int16).float() / 32768.0
+        waveform = samples.reshape(n_channels, -1).unsqueeze(0)
+        return {"waveform": waveform, "sample_rate": sample_rate}
+
+    return _get
 
 
 # ---------------------------------------------------------------------------
