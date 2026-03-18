@@ -144,7 +144,7 @@ class VideoCombine_pyPTV:
 
         # quality settings per codec
         if encode_codec == "nvenc_hevc":
-            quality_args = ["-rc", "vbr", "-cq", "20"]
+            quality_args = ["-rc", "vbr", "-cq", "18"]
         else:
             quality_args = ["-b:v", "5M"]
 
