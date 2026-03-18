@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import time
 import subprocess
 import numpy as np
@@ -12,7 +13,7 @@ VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
 PYPTV_CODECS_DECODE = ["auto", "h264", "hevc", "av1", "vp9"]
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Probe
 # ---------------------------------------------------------------------------
 
 def _probe_video(video_path, decode_codec="auto"):
@@ -52,6 +53,10 @@ def _probe_video(video_path, decode_codec="auto"):
     return width, height, fps, duration, alpha
 
 
+# ---------------------------------------------------------------------------
+# Frame generator
+# ---------------------------------------------------------------------------
+
 def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
     args = [ffmpeg_path, "-v", "error", "-an"]
 
@@ -62,8 +67,7 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
 
     args += ["-i", video_path, "-pix_fmt", "rgba64le", "-f", "rawvideo", "-"]
 
-    # rgba64le: 4 channels * 2 bytes = 8 bytes per pixel
-    bpi = width * height * 8
+    bpi = width * height * 8  # rgba64le: 4ch * 2 bytes
     pbar = ProgressBar(1)
     frames_yielded = 0
 
@@ -109,32 +113,40 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
         yield prev
 
 
+# ---------------------------------------------------------------------------
+# Audio extractor
+# ---------------------------------------------------------------------------
+
 def _extract_audio(video_path):
-    """Extract audio from video via ffmpeg, return ComfyUI AUDIO dict or None."""
+    """Extract audio via ffmpeg, return {"waveform": tensor, "sample_rate": int} or None."""
     try:
         import torchaudio
-        import io as _io
 
         args = [
             ffmpeg_path, "-v", "error",
             "-i", video_path,
-            "-vn",                   # no video
-            "-acodec", "pcm_s16le",  # uncompressed wav
+            "-vn",
+            "-acodec", "pcm_s16le",
             "-f", "wav",
             "pipe:1",
         ]
         res = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if res.returncode != 0 or len(res.stdout) < 44:  # 44 = wav header min
+        if res.returncode != 0 or len(res.stdout) < 44:
             return None
 
-        buf = _io.BytesIO(res.stdout)
-        waveform, sample_rate = torchaudio.load(buf)
-        # ComfyUI AUDIO format: {"waveform": [1, channels, samples], "sample_rate": int}
+        waveform, sample_rate = torchaudio.load(io.BytesIO(res.stdout))
         return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
 
     except Exception as e:
         print(f"[pyPTV] Audio extraction failed: {e}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Core loader
+# ---------------------------------------------------------------------------
+
+def _load_video_ffmpeg(video_path, decode_codec):
     video_path = strip_path(video_path)
     width, height, fps, duration, alpha = _probe_video(video_path, decode_codec)
 
@@ -153,7 +165,7 @@ def _extract_audio(video_path):
 
 
 # ---------------------------------------------------------------------------
-# NODE
+# Node
 # ---------------------------------------------------------------------------
 
 class LoadVideoFFmpeg_pyPTV:
