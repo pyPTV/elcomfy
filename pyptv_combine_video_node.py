@@ -173,7 +173,7 @@ class VideoCombine_pyPTV:
             )
 
         result = {"filename": os.path.basename(out_path), "subfolder": "", "type": "output"}
-        return {"ui": {"videos": [result], "preview": [result]}}
+        return {"ui": {"gifs": [result]}}
 
 # ---------------------------------------------------------------------------
 # Registration
