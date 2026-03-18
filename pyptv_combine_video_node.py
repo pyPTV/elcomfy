@@ -1,5 +1,5 @@
 import os
-import io
+import tempfile
 import subprocess
 import numpy as np
 import folder_paths
@@ -8,17 +8,15 @@ from .pyptv_utils import ffmpeg_path, ENCODE_ARGS
 
 PYPTV_CODECS_ENCODE = ["h264", "nvenc_hevc", "hevc", "av1"]
 
-# pix_fmt choices exposed to user
 PYPTV_PIX_FMTS = [
-    "auto",         # pick best for chosen codec (default)
-    "yuv420p",      # 8-bit, max compatibility
-    "yuv420p10le",  # 10-bit, good quality
-    "p010le",       # 10-bit, NVENC/DXVA friendly
-    "yuv444p",      # 8-bit, no chroma subsampling
-    "yuv444p10le",  # 10-bit, no chroma subsampling
+    "auto",
+    "yuv420p",
+    "yuv420p10le",
+    "p010le",
+    "yuv444p",
+    "yuv444p10le",
 ]
 
-# default pix_fmt per codec when user picks "auto"
 _CODEC_DEFAULT_PIX_FMT = {
     "h264":       "yuv420p",
     "nvenc_hevc": "p010le",
@@ -33,6 +31,45 @@ _CODEC_LIB = {
     "av1":        "libsvtav1",
 }
 
+# ---------------------------------------------------------------------------
+# Audio helper — waveform tensor back to wav temp file, no torchaudio needed
+# ---------------------------------------------------------------------------
+
+def _audio_to_temp_wav(audio) -> str | None:
+    """Convert ComfyUI AUDIO dict to a temp wav file. Returns path or None."""
+    try:
+        import wave
+        import io
+
+        waveform = audio["waveform"]    # [1, channels, samples]
+        sample_rate = audio["sample_rate"]
+
+        # squeeze batch dim -> [channels, samples]
+        if waveform.dim() == 3:
+            waveform = waveform.squeeze(0)
+
+        # mix down to mono if needed
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        samples_np = (waveform[0].clamp(-1.0, 1.0).cpu().numpy() * 32767).astype("int16")
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        with wave.open(tmp, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(samples_np.tobytes())
+        tmp.close()
+        return tmp.name
+
+    except Exception as e:
+        print(f"[pyPTV] Audio conversion failed: {e}")
+        return None
+
+# ---------------------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------------------
 
 class VideoCombine_pyPTV:
     @classmethod
@@ -68,7 +105,7 @@ class VideoCombine_pyPTV:
         output_dir = folder_paths.get_output_directory()
         os.makedirs(output_dir, exist_ok=True)
 
-        # unique filename
+        # unique output filename
         i = 1
         while True:
             out_path = os.path.join(output_dir, f"{filename_prefix}_{i:05d}.mp4")
@@ -79,17 +116,20 @@ class VideoCombine_pyPTV:
         effective_fps = fps * fps_multiplier
         N, H, W, C = images.shape
 
-        # resolve pix_fmt
         resolved_pix_fmt = (
-            _CODEC_DEFAULT_PIX_FMT[encode_codec]
-            if pix_fmt == "auto"
-            else pix_fmt
+            _CODEC_DEFAULT_PIX_FMT[encode_codec] if pix_fmt == "auto" else pix_fmt
         )
 
-        # keep 16-bit going into ffmpeg, let ffmpeg do the conversion
+        # 16-bit raw frames into ffmpeg
         raw = (images.numpy() * 65535).clip(0, 65535).astype(np.uint16)
         in_pix_fmt = "rgba64le" if C == 4 else "rgb48le"
 
+        # write audio to temp file if present (avoids pipe:3 Windows issues)
+        audio_tmp = None
+        if audio is not None:
+            audio_tmp = _audio_to_temp_wav(audio)
+
+        # build ffmpeg args
         args = [
             ffmpeg_path, "-y",
             "-f", "rawvideo",
@@ -99,41 +139,20 @@ class VideoCombine_pyPTV:
             "-i", "pipe:0",
         ]
 
-        # audio
-        audio_bytes = None
-        if audio is not None:
-            try:
-                import torchaudio
-                waveform = audio["waveform"].squeeze(0)
-                sample_rate = audio["sample_rate"]
-                buf = io.BytesIO()
-                torchaudio.save(buf, waveform, sample_rate, format="wav")
-                audio_bytes = buf.getvalue()
-            except Exception:
-                audio_bytes = None
-
-        if audio_bytes is not None:
-            args += ["-f", "wav", "-i", "pipe:3"]
+        if audio_tmp is not None:
+            args += ["-i", audio_tmp]
 
         args += ["-c:v", _CODEC_LIB[encode_codec], "-pix_fmt", resolved_pix_fmt]
 
-        if audio_bytes is not None:
+        if audio_tmp is not None:
             args += ["-c:a", "aac", "-shortest"]
 
         args += [out_path]
 
+        # encode
         pbar = ProgressBar(N)
-
         try:
-            if audio_bytes is not None:
-                r_fd, w_fd = os.pipe()
-                proc = subprocess.Popen(args, stdin=subprocess.PIPE,
-                                        pass_fds=(r_fd,))
-                os.close(r_fd)
-                os.write(w_fd, audio_bytes)
-                os.close(w_fd)
-            else:
-                proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+            proc = subprocess.Popen(args, stdin=subprocess.PIPE)
 
             for idx in range(N):
                 proc.stdin.write(raw[idx].tobytes())
@@ -144,6 +163,9 @@ class VideoCombine_pyPTV:
 
         except BrokenPipeError:
             raise RuntimeError("ffmpeg encode process broke pipe.")
+        finally:
+            if audio_tmp is not None and os.path.exists(audio_tmp):
+                os.unlink(audio_tmp)
 
         if proc.returncode != 0:
             raise RuntimeError(
@@ -153,7 +175,6 @@ class VideoCombine_pyPTV:
         return {"ui": {"videos": [{"filename": os.path.basename(out_path),
                                    "subfolder": "",
                                    "type": "output"}]}}
-
 
 # ---------------------------------------------------------------------------
 # Registration

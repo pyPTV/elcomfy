@@ -1,13 +1,12 @@
 import os
 import re
-import io
 import time
 import subprocess
 import numpy as np
 import torch
 import folder_paths
 from comfy.utils import ProgressBar
-from .pyptv_utils import ffmpeg_path, ENCODE_ARGS, strip_path, hash_path
+from .pyptv_utils import ffmpeg_path, ENCODE_ARGS, strip_path, hash_path, lazy_get_audio
 
 VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
 PYPTV_CODECS_DECODE = ["auto", "h264", "hevc", "av1", "vp9"]
@@ -51,7 +50,6 @@ def _probe_video(video_path, decode_codec="auto"):
                 + float(dur_m.group(3))) if dur_m else 0.0
 
     return width, height, fps, duration, alpha
-
 
 # ---------------------------------------------------------------------------
 # Frame generator
@@ -112,41 +110,6 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
     if prev is not None:
         yield prev
 
-
-# ---------------------------------------------------------------------------
-# Audio extractor
-# ---------------------------------------------------------------------------
-
-def _extract_audio(video_path):
-    """Return a callable that extracts audio on demand — same as VHS lazy_get_audio."""
-    def _get():
-        args = [
-            ffmpeg_path, "-v", "error",
-            "-i", video_path,
-            "-vn",
-            "-acodec", "pcm_s16le",
-            "-f", "wav",
-            "pipe:1",
-        ]
-        res = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if res.returncode != 0 or len(res.stdout) < 44:
-            raise RuntimeError("[pyPTV] Audio extraction failed:\n"
-                               + res.stderr.decode(*ENCODE_ARGS))
-
-        import wave as _wave
-        buf = io.BytesIO(res.stdout)
-        with _wave.open(buf, "rb") as wf:
-            n_channels  = wf.getnchannels()
-            sample_rate = wf.getframerate()
-            raw         = wf.readframes(wf.getnframes())
-
-        samples = torch.frombuffer(bytearray(raw), dtype=torch.int16).float() / 32768.0
-        waveform = samples.reshape(n_channels, -1).unsqueeze(0)
-        return {"waveform": waveform, "sample_rate": sample_rate}
-
-    return _get
-
-
 # ---------------------------------------------------------------------------
 # Core loader
 # ---------------------------------------------------------------------------
@@ -165,9 +128,8 @@ def _load_video_ffmpeg(video_path, decode_codec):
     if len(images) == 0:
         raise RuntimeError("No frames were loaded from the video.")
 
-    audio = _extract_audio(video_path)
+    audio = lazy_get_audio(video_path, 0, duration)
     return images, fps, audio
-
 
 # ---------------------------------------------------------------------------
 # Node
@@ -208,7 +170,6 @@ class LoadVideoFFmpeg_pyPTV:
         if not folder_paths.exists_annotated_filepath(video):
             return f"Invalid video file: {video}"
         return True
-
 
 # ---------------------------------------------------------------------------
 # Registration
