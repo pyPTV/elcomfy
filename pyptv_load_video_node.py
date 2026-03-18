@@ -158,6 +158,7 @@ class LoadVideoFFmpeg_pyPTV:
 
     def load_video(self, video, decode_codec):
         video_path = folder_paths.get_annotated_filepath(strip_path(video))
+        print(f"[pyPTV] path={video_path} exists={os.path.exists(video_path)}")
         images, fps, audio = _load_video_ffmpeg(video_path, decode_codec)
         return (images, fps, audio)
 
