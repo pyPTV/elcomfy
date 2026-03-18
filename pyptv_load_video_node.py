@@ -6,10 +6,7 @@ import numpy as np
 import torch
 import folder_paths
 from comfy.utils import ProgressBar
-from .pyptv_utils import (
-    ffmpeg_path, ENCODE_ARGS,
-    lazy_get_audio, strip_path, hash_path
-)
+from .pyptv_utils import ffmpeg_path, ENCODE_ARGS, strip_path, hash_path
 
 VIDEO_EXTENSIONS = {"mp4", "mkv", "webm", "mov", "gif"}
 PYPTV_CODECS_DECODE = ["auto", "h264", "hevc", "av1", "vp9"]
@@ -112,7 +109,32 @@ def _ffmpeg_frame_generator(video_path, width, height, alpha, decode_codec):
         yield prev
 
 
-def _load_video_ffmpeg(video_path, decode_codec):
+def _extract_audio(video_path):
+    """Extract audio from video via ffmpeg, return ComfyUI AUDIO dict or None."""
+    try:
+        import torchaudio
+        import io as _io
+
+        args = [
+            ffmpeg_path, "-v", "error",
+            "-i", video_path,
+            "-vn",                   # no video
+            "-acodec", "pcm_s16le",  # uncompressed wav
+            "-f", "wav",
+            "pipe:1",
+        ]
+        res = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0 or len(res.stdout) < 44:  # 44 = wav header min
+            return None
+
+        buf = _io.BytesIO(res.stdout)
+        waveform, sample_rate = torchaudio.load(buf)
+        # ComfyUI AUDIO format: {"waveform": [1, channels, samples], "sample_rate": int}
+        return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+
+    except Exception as e:
+        print(f"[pyPTV] Audio extraction failed: {e}")
+        return None
     video_path = strip_path(video_path)
     width, height, fps, duration, alpha = _probe_video(video_path, decode_codec)
 
@@ -126,7 +148,7 @@ def _load_video_ffmpeg(video_path, decode_codec):
     if len(images) == 0:
         raise RuntimeError("No frames were loaded from the video.")
 
-    audio = lazy_get_audio(video_path, 0, duration)()
+    audio = _extract_audio(video_path)
     return images, fps, audio
 
 
