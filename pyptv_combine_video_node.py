@@ -172,9 +172,8 @@ class VideoCombine_pyPTV:
                 f"ffmpeg encode failed with return code {proc.returncode}"
             )
 
-        return {"ui": {"videos": [{"filename": os.path.basename(out_path),
-                                   "subfolder": "",
-                                   "type": "output"}]}}
+        result = {"filename": os.path.basename(out_path), "subfolder": "", "type": "output"}
+        return {"ui": {"videos": [result], "preview": [result]}}
 
 # ---------------------------------------------------------------------------
 # Registration
