@@ -1,9 +1,14 @@
 """
 pyPTV — Image Crop node
-Crop a batch of images to a target resolution from center (or custom offset).
+Crop a batch of images to a preset resolution from center.
 """
 
 import torch
+
+_PRESETS = {
+    "1080p  →  1920×1080": (1920, 1080),
+    "720p   →  1280×720":  (1280, 720),
+}
 
 
 class ImageCrop_pyPTV:
@@ -11,18 +16,8 @@ class ImageCrop_pyPTV:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images":    ("IMAGE",),
-                "width":     ("INT", {"default": 1920, "min": 64, "max": 8192, "step": 2,
-                                      "tooltip": "Target crop width in pixels."}),
-                "height":    ("INT", {"default": 1080, "min": 64, "max": 8192, "step": 2,
-                                      "tooltip": "Target crop height in pixels."}),
-                "align":     (["center", "top-left", "custom"], {"default": "center"}),
-            },
-            "optional": {
-                "x":         ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
-                                      "tooltip": "X offset (used when align=custom)."}),
-                "y":         ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
-                                      "tooltip": "Y offset (used when align=custom)."}),
+                "images":     ("IMAGE",),
+                "dimensions": (list(_PRESETS.keys()),),
             },
         }
 
@@ -31,21 +26,16 @@ class ImageCrop_pyPTV:
     RETURN_NAMES = ("images",)
     FUNCTION     = "crop"
 
-    def crop(self, images, width, height, align, x=0, y=0):
-        # images: [N, H, W, C]
+    def crop(self, images, dimensions):
+        target_w, target_h = _PRESETS[dimensions]
+
         N, H, W, C = images.shape
 
-        crop_h = min(height, H)
-        crop_w = min(width,  W)
+        crop_h = min(target_h, H)
+        crop_w = min(target_w, W)
 
-        if align == "center":
-            y0 = (H - crop_h) // 2
-            x0 = (W - crop_w) // 2
-        elif align == "top-left":
-            y0, x0 = 0, 0
-        else:  # custom
-            y0 = max(0, min(y, H - crop_h))
-            x0 = max(0, min(x, W - crop_w))
+        y0 = (H - crop_h) // 2
+        x0 = (W - crop_w) // 2
 
         cropped = images[:, y0:y0 + crop_h, x0:x0 + crop_w, :]
         return (cropped,)
