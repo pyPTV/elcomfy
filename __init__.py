@@ -41,6 +41,26 @@ try:
 except Exception as e:
     print(f"[pyPTV] Failed to load pyptv_combine_video_node: {e}")
 
-WEB_DIRECTORY = "./js"
+try:
+    from .pyptv_rife_node import (
+        NODE_CLASS_MAPPINGS       as _M5,
+        NODE_DISPLAY_NAME_MAPPINGS as _D5,
+    )
+    NODE_CLASS_MAPPINGS.update(_M5)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_D5)
+except Exception as e:
+    print(f"[pyPTV] Failed to load pyptv_rife_node: {e}")
 
+try:
+    from .pyptv_crop_node import (
+        NODE_CLASS_MAPPINGS       as _M6,
+        NODE_DISPLAY_NAME_MAPPINGS as _D6,
+    )
+    NODE_CLASS_MAPPINGS.update(_M6)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_D6)
+except Exception as e:
+    print(f"[pyPTV] Failed to load pyptv_crop_node: {e}")
+
+WEB_DIRECTORY = "./js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+
