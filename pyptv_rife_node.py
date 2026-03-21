@@ -52,7 +52,6 @@ def _load_rife(ckpt_name: str, dtype: str):
 @torch.inference_mode()
 def _interpolate_pair(model, img0: torch.Tensor, img1: torch.Tensor,
                       multiplier: int, scale_factor: float,
-                      fast_mode: bool,
                       dtype: torch.dtype, device: torch.device) -> list:
     """
     Recursively interpolate between img0 and img1.
@@ -76,7 +75,6 @@ def _interpolate_pair(model, img0: torch.Tensor, img1: torch.Tensor,
         timestep=0.5,
         scale_list=scale_list,
         training=False,
-        fastmode=fast_mode,
         ensemble=False,
     )  # [1, C, H, W]
 
@@ -84,9 +82,9 @@ def _interpolate_pair(model, img0: torch.Tensor, img1: torch.Tensor,
         return [mid]
 
     left  = _interpolate_pair(model, img0, mid,  multiplier // 2,
-                               scale_factor, fast_mode, dtype, device)
+                               scale_factor, dtype, device)
     right = _interpolate_pair(model, mid,  img1, multiplier // 2,
-                               scale_factor, fast_mode, dtype, device)
+                               scale_factor, dtype, device)
     return left + [mid] + right
 
 
@@ -111,7 +109,6 @@ class RIFEInterpolate_pyPTV:
                 "multiplier":   ("INT",   {"default": 2, "min": 2, "max": 8, "step": 1}),
                 "scale_factor": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25,
                                            "tooltip": "1.0 = standard. 0.5 = finer flow (more VRAM). 2.0 = coarser/faster."}),
-                "fast_mode":    ("BOOLEAN", {"default": True}),
                 "dtype":        (["float32", "float16"], {"default": "float32"}),
                 "batch_size":   ("INT",   {"default": 30, "min": 1, "max": 256, "step": 1}),
                 "clear_cache_after_n_frames": ("INT", {"default": 241, "min": 1, "max": 9999}),
@@ -124,7 +121,7 @@ class RIFEInterpolate_pyPTV:
     FUNCTION     = "interpolate"
 
     def interpolate(self, frames, ckpt_name, multiplier, scale_factor,
-                    fast_mode, dtype, batch_size, clear_cache_after_n_frames):
+                    dtype, batch_size, clear_cache_after_n_frames):
 
         model, device, torch_dtype = _load_rife(ckpt_name, dtype)
 
@@ -148,7 +145,7 @@ class RIFEInterpolate_pyPTV:
 
             interp = _interpolate_pair(
                 model, img0, img1, multiplier,
-                scale_factor, fast_mode, torch_dtype, device
+                scale_factor, torch_dtype, device
             )
             for mid in interp:
                 arr = mid.squeeze(0).permute(1, 2, 0).float().cpu().numpy()
