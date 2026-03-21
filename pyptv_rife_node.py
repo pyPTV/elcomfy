@@ -110,7 +110,6 @@ class RIFEInterpolate_pyPTV:
                 "scale_factor": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25,
                                            "tooltip": "1.0 = standard. 0.5 = finer flow (more VRAM). 2.0 = coarser/faster."}),
                 "dtype":        (["float32", "float16"], {"default": "float32"}),
-                "batch_size":   ("INT",   {"default": 30, "min": 1, "max": 256, "step": 1}),
                 "clear_cache_after_n_frames": ("INT", {"default": 241, "min": 1, "max": 9999}),
             },
         }
@@ -121,7 +120,7 @@ class RIFEInterpolate_pyPTV:
     FUNCTION     = "interpolate"
 
     def interpolate(self, frames, ckpt_name, multiplier, scale_factor,
-                    dtype, batch_size, clear_cache_after_n_frames):
+                    dtype, clear_cache_after_n_frames):
 
         model, device, torch_dtype = _load_rife(ckpt_name, dtype)
 
