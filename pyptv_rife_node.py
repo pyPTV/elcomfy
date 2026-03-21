@@ -20,11 +20,27 @@ _rife_cache = {}
 
 def _detect_arch_ver(ckpt_name: str) -> str:
     name = ckpt_name.lower()
-    for ver in ["4.10", "4.7", "4.6", "4.5", "4.3", "4.2", "4.0"]:
-        tag = ver.replace(".", "")
-        if f"rife{tag}" in name or f"rife{ver}" in name or tag in name:
+
+    # Явные числовые маппинги: rife47/48/49 → arch 4.7, rife410/411/412 → arch 4.10
+    _NUM_MAP = {
+        "47": "4.7", "48": "4.7", "49": "4.7",
+        "410": "4.10", "411": "4.10", "412": "4.10",
+        "45": "4.5",
+        "46": "4.6",
+        "43": "4.3", "44": "4.3",
+        "42": "4.2",
+        "40": "4.0", "41": "4.0",
+    }
+    for num, ver in _NUM_MAP.items():
+        if f"rife{num}" in name:
             return ver
-    return "4.10"
+
+    # fallback по точечной версии в имени файла
+    for ver in ["4.10", "4.7", "4.6", "4.5", "4.3", "4.2", "4.0"]:
+        if ver in name:
+            return ver
+
+    return "4.7"  # rife47/49 — самые популярные, безопаснее чем 4.10
 
 
 def _load_rife(ckpt_name: str, dtype: str):
