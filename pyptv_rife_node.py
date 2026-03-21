@@ -22,7 +22,6 @@ def _load_rife(ckpt_name: str, dtype: str):
     if key in _rife_cache:
         return _rife_cache[key]
 
-    # поддерживаем .pth и .pkl
     model_path = os.path.join(folder_paths.models_dir, "rife", ckpt_name)
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"[pyPTV] RIFE model not found: {model_path}")
@@ -33,7 +32,6 @@ def _load_rife(ckpt_name: str, dtype: str):
     model = IFNet()
 
     sd = torch.load(model_path, map_location="cpu", weights_only=True)
-    # strip "module." prefix if DDP checkpoint
     sd = {k.replace("module.", ""): v for k, v in sd.items()}
     model.load_state_dict(sd, strict=False)
 
@@ -46,22 +44,16 @@ def _load_rife(ckpt_name: str, dtype: str):
 
 
 # ---------------------------------------------------------------------------
-# Interpolation helper
+# Batch interpolation — один проход через модель для N пар
 # ---------------------------------------------------------------------------
 
 @torch.inference_mode()
-def _interpolate_pair(model, img0: torch.Tensor, img1: torch.Tensor,
-                      multiplier: int, scale_factor: float,
-                      dtype: torch.dtype, device: torch.device) -> list:
+def _interp_batch(model, img0_batch: torch.Tensor, img1_batch: torch.Tensor,
+                  scale_factor: float) -> torch.Tensor:
     """
-    Recursively interpolate between img0 and img1.
-    Returns list of (multiplier - 1) intermediate frames, NOT including img0/img1.
-    img0, img1: [1, C, H, W] on device
+    img0_batch, img1_batch: [B, C, H, W]
+    returns: [B, C, H, W] — промежуточные кадры
     """
-    if multiplier == 1:
-        return []
-
-    # v4.25 uses 5-level scale list
     scale_list = [
         16 / scale_factor,
         8  / scale_factor,
@@ -69,22 +61,33 @@ def _interpolate_pair(model, img0: torch.Tensor, img1: torch.Tensor,
         2  / scale_factor,
         1  / scale_factor,
     ]
-
-    mid = model(
-        img0, img1,
+    return model(
+        img0_batch, img1_batch,
         timestep=0.5,
         scale_list=scale_list,
         training=False,
         ensemble=False,
-    )  # [1, C, H, W]
+    )
+
+
+@torch.inference_mode()
+def _interpolate_recursive(model, img0_batch: torch.Tensor, img1_batch: torch.Tensor,
+                            multiplier: int, scale_factor: float) -> list:
+    """
+    Рекурсивно интерполирует между img0_batch и img1_batch.
+    Возвращает список тензоров [B, C, H, W] промежуточных кадров
+    в правильном порядке (без img0 и img1).
+    """
+    if multiplier == 1:
+        return []
+
+    mid = _interp_batch(model, img0_batch, img1_batch, scale_factor)
 
     if multiplier == 2:
         return [mid]
 
-    left  = _interpolate_pair(model, img0, mid,  multiplier // 2,
-                               scale_factor, dtype, device)
-    right = _interpolate_pair(model, mid,  img1, multiplier // 2,
-                               scale_factor, dtype, device)
+    left  = _interpolate_recursive(model, img0_batch, mid,  multiplier // 2, scale_factor)
+    right = _interpolate_recursive(model, mid,  img1_batch, multiplier // 2, scale_factor)
     return left + [mid] + right
 
 
@@ -106,9 +109,11 @@ class RIFEInterpolate_pyPTV:
             "required": {
                 "frames":       ("IMAGE",),
                 "ckpt_name":    (models,),
-                "multiplier":   ("INT",   {"default": 2, "min": 2, "max": 8, "step": 1}),
-                "scale_factor": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25,
+                "multiplier":   ("INT",   {"default": 2,    "min": 2,    "max": 8,    "step": 1}),
+                "scale_factor": ("FLOAT", {"default": 1.0,  "min": 0.25, "max": 4.0,  "step": 0.25,
                                            "tooltip": "1.0 = standard. 0.5 = finer flow (more VRAM). 2.0 = coarser/faster."}),
+                "batch_size":   ("INT",   {"default": 16,   "min": 8,    "max": 64,   "step": 8,
+                                           "tooltip": "Pairs processed per GPU call. Higher = faster but more VRAM."}),
                 "dtype":        (["float32", "float16"], {"default": "float32"}),
                 "clear_cache_after_n_frames": ("INT", {"default": 241, "min": 1, "max": 9999}),
             },
@@ -120,45 +125,59 @@ class RIFEInterpolate_pyPTV:
     FUNCTION     = "interpolate"
 
     def interpolate(self, frames, ckpt_name, multiplier, scale_factor,
-                    dtype, clear_cache_after_n_frames):
+                    batch_size, dtype, clear_cache_after_n_frames):
 
         model, device, torch_dtype = _load_rife(ckpt_name, dtype)
 
         N, H, W, C = frames.shape
-        pbar = ProgressBar(N - 1)
+        num_pairs = N - 1
+        pbar = ProgressBar(num_pairs)
 
+        # Конвертируем все кадры в GPU тензоры [C, H, W]
+        all_frames = torch.from_numpy(
+            frames.numpy()
+        ).permute(0, 3, 1, 2).to(device=device, dtype=torch_dtype)  # [N, C, H, W]
+
+        # Результат: список numpy массивов [H, W, C]
         result = []
         frames_since_cache_clear = 0
 
-        def to_gpu(img_np):
-            t = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
-            return t.to(device=device, dtype=torch_dtype)
+        # Обрабатываем пары батчами
+        i = 0
+        while i < num_pairs:
+            b_end = min(i + batch_size, num_pairs)
+            b_size = b_end - i
 
-        imgs_gpu = [to_gpu(frames[i].numpy()) for i in range(N)]
+            img0_batch = all_frames[i:i + b_size]        # [B, C, H, W]
+            img1_batch = all_frames[i + 1:i + b_size + 1]  # [B, C, H, W]
 
-        for i in range(N - 1):
-            img0 = imgs_gpu[i]
-            img1 = imgs_gpu[i + 1]
-
-            result.append(frames[i].numpy())
-
-            interp = _interpolate_pair(
-                model, img0, img1, multiplier,
-                scale_factor, torch_dtype, device
+            # Получаем промежуточные кадры для каждого уровня рекурсии
+            # interp_levels — список тензоров [B, C, H, W]
+            interp_levels = _interpolate_recursive(
+                model, img0_batch, img1_batch, multiplier, scale_factor
             )
-            for mid in interp:
-                arr = mid.squeeze(0).permute(1, 2, 0).float().cpu().numpy()
-                arr = np.clip(arr, 0.0, 1.0)
-                result.append(arr)
 
-            frames_since_cache_clear += 1
+            # Собираем результат попарно: img0[j], interp[j], ..., (img1 добавим на след итерации)
+            for j in range(b_size):
+                # оригинальный кадр
+                result.append(
+                    all_frames[i + j].permute(1, 2, 0).float().cpu().numpy()
+                )
+                # промежуточные кадры в правильном порядке
+                for level_tensor in interp_levels:
+                    arr = level_tensor[j].permute(1, 2, 0).float().cpu().numpy()
+                    result.append(np.clip(arr, 0.0, 1.0))
+
+            frames_since_cache_clear += b_size
             if frames_since_cache_clear >= clear_cache_after_n_frames:
                 soft_empty_cache()
                 frames_since_cache_clear = 0
 
-            pbar.update_absolute(i + 1, N - 1)
+            pbar.update_absolute(b_end, num_pairs)
+            i += b_size
 
-        result.append(frames[N - 1].numpy())
+        # Последний кадр
+        result.append(all_frames[N - 1].permute(1, 2, 0).float().cpu().numpy())
 
         out = torch.from_numpy(np.stack(result, axis=0))
         return (out,)
